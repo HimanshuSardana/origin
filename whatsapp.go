@@ -9,8 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -51,47 +49,30 @@ func listContacts(db *sql.DB) (string, error) {
 	}
 	defer rows.Close()
 
-	var contacts []string
+	var contactList []Contact
 	for rows.Next() {
 		var jid, fullName string
 		if err := rows.Scan(&jid, &fullName); err != nil {
 			return "", fmt.Errorf("scan row: %w", err)
 		}
-		contacts = append(contacts, fmt.Sprintf("%s\t%s", fullName, jid))
+		contactList = append(contactList, Contact{
+			JID:     jid,
+			Name:    fullName,
+			Preview: "Click to view messages...",
+		})
 	}
 
-	if len(contacts) == 0 {
+	if len(contactList) == 0 {
 		fmt.Println("No contacts found")
 		return "", nil
 	}
 
-	// Pipe contacts to fzf
-	fzf := exec.Command("fzf", "--delimiter=\t", "--with-nth=1")
-	stdin, err := fzf.StdinPipe()
-	if err != nil {
-		return "", fmt.Errorf("create stdin pipe: %w", err)
-	}
+	var selectedContact Contact
+	showContactPicker(contactList, func(c Contact) {
+		selectedContact = c
+	})
 
-	go func() {
-		defer stdin.Close()
-		for _, c := range contacts {
-			fmt.Fprintln(stdin, c)
-		}
-	}()
-
-	output, err := fzf.Output()
-	if err != nil {
-		return "", nil // fzf cancelled
-	}
-
-	if len(output) > 0 {
-		selected := strings.TrimSpace(string(output))
-		parts := strings.SplitN(selected, "\t", 2)
-		if len(parts) == 2 {
-			return strings.TrimSpace(parts[1]), nil
-		}
-	}
-	return "", nil
+	return selectedContact.JID, nil
 }
 
 func listMessages(client *whatsmeow.Client, chatJID string) (*events.Message, error) {
@@ -150,63 +131,56 @@ func listMessages(client *whatsmeow.Client, chatJID string) (*events.Message, er
 			return nil, nil
 		}
 
-		var displayLines []string
+		var msgList []Message
 		for idx, msg := range messages {
-			var display string
 			t := msg.Info.Timestamp.Format("2006-01-02 15:04")
+			msgType := "Other"
+			var display string
+			
 			if conv := msg.Message.GetConversation(); conv != "" {
-				convStr := conv
-				if len(convStr) > 100 {
-					convStr = convStr[:100] + "..."
+				msgType = "Text"
+				display = conv
+				if len(display) > 80 {
+					display = display[:80] + "..."
 				}
-				display = fmt.Sprintf("[Text] %s: %s", t, convStr)
 			} else if msg.Message.GetImageMessage() != nil {
-				display = fmt.Sprintf("[Image] %s", t)
+				msgType = "Image"
+				display = "Image message"
 			} else if msg.Message.GetVideoMessage() != nil {
-				display = fmt.Sprintf("[Video] %s", t)
+				msgType = "Video"
+				display = "Video message"
 			} else if msg.Message.GetDocumentMessage() != nil {
-				display = fmt.Sprintf("[Doc] %s", t)
+				msgType = "Doc"
+				display = "Document message"
 			} else {
-				display = fmt.Sprintf("[Other] %s", t)
+				display = "Unknown message type"
 			}
-			displayLines = append(displayLines, fmt.Sprintf("%d\t%s", idx, display))
-		}
-
-		fzf := exec.Command("fzf", "--delimiter=\t", "--with-nth=2")
-		stdin, err := fzf.StdinPipe()
-		if err != nil {
-			return nil, fmt.Errorf("create stdin pipe: %w", err)
-		}
-
-		go func() {
-			defer stdin.Close()
-			for _, line := range displayLines {
-				fmt.Fprintln(stdin, line)
+			
+			sender := msg.Info.Sender.User
+			if sender == "" {
+				sender = "You"
 			}
-		}()
-
-		output, err := fzf.Output()
-		if err != nil {
-			return nil, nil // cancelled
+			
+			msgList = append(msgList, Message{
+				Index:   idx,
+				Display: display,
+				FullMsg: msg,
+				Time:    t,
+				Type:    msgType,
+				Sender:  sender,
+			})
 		}
 
-		if len(output) == 0 {
+		var selectedMsg Message
+		showMessagePicker(msgList, func(m Message) {
+			selectedMsg = m
+		})
+
+		if selectedMsg.FullMsg == nil {
 			return nil, nil
 		}
 
-		parts := strings.SplitN(string(output), "\t", 2)
-		if len(parts) < 1 {
-			return nil, nil
-		}
-		selectedIdx, err := strconv.Atoi(strings.TrimSpace(parts[0]))
-		if err != nil {
-			return nil, fmt.Errorf("invalid selection: %w", err)
-		}
-		if selectedIdx < 0 || selectedIdx >= len(messages) {
-			return nil, fmt.Errorf("invalid index")
-		}
-
-		return messages[selectedIdx], nil
+		return selectedMsg.FullMsg, nil
 
 	case <-time.After(30 * time.Second):
 		return nil, fmt.Errorf("timeout waiting for history sync response")
