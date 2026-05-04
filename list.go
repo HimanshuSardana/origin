@@ -113,6 +113,13 @@ func runListMode(jidFlag string) error {
 		}
 
 		if err != nil {
+			if strings.Contains(err.Error(), "403") {
+				fmt.Fprintln(os.Stderr, "Error: Media download failed (HTTP 403)")
+				fmt.Fprintln(os.Stderr, "This usually means the media URL has expired.")
+				fmt.Fprintln(os.Stderr, "WhatsApp media URLs are temporary and expire after some time.")
+				fmt.Fprintln(os.Stderr, "Try selecting a more recent message.")
+				return nil
+			}
 			return fmt.Errorf("download media: %w", err)
 		}
 
@@ -184,13 +191,19 @@ func listMessagesFZF(client *whatsmeow.Client, chatJID string) (*events.Message,
 		return nil, err
 	}
 
+	fmt.Fprintf(os.Stderr, "DEBUG: Starting listMessagesFZF for %s\n", chatJID)
+	
 	historyChan := make(chan *events.HistorySync, 1)
 	handlerID := client.AddEventHandler(func(evt interface{}) {
+		fmt.Fprintf(os.Stderr, "DEBUG: Got event type %T\n", evt)
 		if hs, ok := evt.(*events.HistorySync); ok {
+			fmt.Fprintf(os.Stderr, "DEBUG: Got HistorySync, type=%v\n", hs.Data.GetSyncType())
 			if hs.Data.GetSyncType() == waHistorySync.HistorySync_ON_DEMAND {
 				select {
 				case historyChan <- hs:
+					fmt.Fprintf(os.Stderr, "DEBUG: Sent history to channel\n")
 				default:
+					fmt.Fprintf(os.Stderr, "DEBUG: Channel full, dropping\n")
 				}
 			}
 		}
@@ -216,12 +229,17 @@ func listMessagesFZF(client *whatsmeow.Client, chatJID string) (*events.Message,
 
 	select {
 	case hs := <-historyChan:
+		fmt.Fprintf(os.Stderr, "DEBUG: Got history sync with %d conversations\n", len(hs.Data.GetConversations()))
+		
 		var messages []*events.Message
 		for _, conv := range hs.Data.GetConversations() {
+			fmt.Fprintf(os.Stderr, "DEBUG: Checking conversation %s\n", conv.GetID())
 			if conv.GetID() == jid.String() || conv.GetID() == jid.ToNonAD().String() {
+				fmt.Fprintf(os.Stderr, "DEBUG: Found matching conversation with %d messages\n", len(conv.GetMessages()))
 				for _, histMsg := range conv.GetMessages() {
 					parsedMsg, err := client.ParseWebMessage(jid, histMsg.GetMessage())
 					if err != nil {
+						fmt.Fprintf(os.Stderr, "DEBUG: Failed to parse message: %v\n", err)
 						continue
 					}
 					messages = append(messages, parsedMsg)
@@ -231,7 +249,8 @@ func listMessagesFZF(client *whatsmeow.Client, chatJID string) (*events.Message,
 		}
 
 		if len(messages) == 0 {
-			return nil, nil
+			fmt.Fprintf(os.Stderr, "DEBUG: No messages found for this contact\n")
+			return nil, fmt.Errorf("no messages found")
 		}
 
 		var lines []string
@@ -286,6 +305,7 @@ func listMessagesFZF(client *whatsmeow.Client, chatJID string) (*events.Message,
 		return nil, nil
 
 	case <-time.After(30 * time.Second):
+		fmt.Fprintf(os.Stderr, "DEBUG: Timeout waiting for history sync\n")
 		return nil, fmt.Errorf("timeout waiting for history sync")
 	}
 }
