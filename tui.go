@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbletea"
+	"github.com/HimanshuSardana/origin/whatsapp"
+	bubbletea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -19,28 +21,32 @@ const (
 
 // Model represents the entire TUI state
 type model struct {
-	// Panels
-	sidebar     bubbletea.Model
-	chatView    bubbletea.Model
-	inputField  bubbletea.Model
+	// Components
+	sidebar    sidebarModel
+	chatView   chatViewModel
+	inputField inputModel
 
 	// State
 	activePanel panelType
 	width       int
 	height      int
+
+	// WhatsApp client
+	waClient *whatsapp.Client
 }
 
-func initialModel() model {
+func initialModel(waClient *whatsapp.Client) model {
 	return model{
-		sidebar:    initialSidebar(),
-		chatView:   initialChatView(),
-		inputField: initialInputField(),
+		sidebar:     initialSidebar(waClient),
+		chatView:    initialChatView(),
+		inputField:  initialInputField(),
 		activePanel: panelSidebar,
+		waClient:    waClient,
 	}
 }
 
 func (m model) Init() bubbletea.Cmd {
-	return nil
+	return m.sidebar.Init()
 }
 
 func (m model) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
@@ -48,7 +54,6 @@ func (m model) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case bubbletea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		// TODO: update child models with new sizes
 		return m, nil
 
 	case bubbletea.KeyMsg:
@@ -72,15 +77,43 @@ func (m model) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	switch m.activePanel {
 	case panelSidebar:
 		newSidebar, cmd := m.sidebar.Update(msg)
-		m.sidebar = newSidebar
+		m.sidebar = newSidebar.(sidebarModel)
+
+		// Check if a contact was selected
+		if m.sidebar.selected >= 0 && m.sidebar.selected < len(m.sidebar.items) {
+			selectedContact := m.sidebar.items[m.sidebar.selected]
+			// Load messages for this contact
+			go func() {
+				_, err := m.waClient.GetMessages(context.Background(), selectedContact.JID, 10)
+				if err == nil {
+					// Update chat view with messages
+					// TODO: implement proper message passing
+				}
+			}()
+			m.sidebar.selected = -1 // reset
+		}
+
 		return m, cmd
 	case panelChat:
 		newChat, cmd := m.chatView.Update(msg)
-		m.chatView = newChat
+		m.chatView = newChat.(chatViewModel)
 		return m, cmd
 	case panelInput:
 		newInput, cmd := m.inputField.Update(msg)
-		m.inputField = newInput
+		m.inputField = newInput.(inputModel)
+
+		// Check if message was sent
+		if m.inputField.sent {
+			// Send message to selected contact
+			if m.chatView.contactJID != "" {
+				go func() {
+					m.waClient.SendMessage(context.Background(), m.chatView.contactJID, m.inputField.value)
+				}()
+				m.inputField.value = ""
+				m.inputField.sent = false
+			}
+		}
+
 		return m, cmd
 	}
 
@@ -91,10 +124,6 @@ func (m model) View() string {
 	// Define layout
 	sidebarWidth := m.width / 3
 	chatWidth := m.width - sidebarWidth
-	inputHeight := 3
-
-	// Adjust for input field
-	chatHeight := m.height - inputHeight
 
 	// Render panels
 	sidebarView := m.sidebar.View()
@@ -129,20 +158,27 @@ func (m model) View() string {
 	)
 }
 
-// Placeholder models for each panel
+// sidebarModel represents the contact list
 type sidebarModel struct {
 	items    []whatsapp.Contact
 	cursor   int
 	selected int // -1 means none
 }
 
-func initialSidebar() bubbletea.Model {
+func initialSidebar(waClient *whatsapp.Client) sidebarModel {
+	contacts, err := waClient.GetContacts()
+	if err != nil {
+		return sidebarModel{items: []whatsapp.Contact{}}
+	}
 	return sidebarModel{
-		items: []whatsapp.Contact{},
+		items:    contacts,
+		cursor:   0,
+		selected: -1,
 	}
 }
 
 func (m sidebarModel) Init() bubbletea.Cmd { return nil }
+
 func (m sidebarModel) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	switch msg := msg.(type) {
 	case bubbletea.KeyMsg:
@@ -155,14 +191,19 @@ func (m sidebarModel) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd)
 			if m.cursor < len(m.items)-1 {
 				m.cursor++
 			}
+		case "enter":
+			if m.cursor >= 0 && m.cursor < len(m.items) {
+				m.selected = m.cursor
+			}
 		}
 	}
 	return m, nil
 }
+
 func (m sidebarModel) View() string {
 	var s strings.Builder
 	for i, item := range m.items {
-		cursor := " "
+		cursor := "  "
 		if i == m.cursor {
 			cursor = "> "
 		}
@@ -174,22 +215,68 @@ func (m sidebarModel) View() string {
 	return s.String()
 }
 
-type chatViewModel struct{ content string }
-func initialChatView() bubbletea.Model { return chatViewModel{content: "Select a contact to view chat"} }
-func (m chatViewModel) Init() bubbletea.Cmd { return nil }
-func (m chatViewModel) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) { return m, nil }
-func (m chatViewModel) View() string { return m.content }
+// chatViewModel represents the chat history view
+type chatViewModel struct {
+	messages   []whatsapp.Message
+	contactJID string
+}
 
-type inputModel struct{ value string }
-func initialInputField() bubbletea.Model { return inputModel{} }
+func initialChatView() chatViewModel {
+	return chatViewModel{
+		messages:   []whatsapp.Message{},
+		contactJID: "",
+	}
+}
+
+func (m chatViewModel) Init() bubbletea.Cmd { return nil }
+
+func (m chatViewModel) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
+	return m, nil
+}
+
+func (m chatViewModel) View() string {
+	var s strings.Builder
+
+	if m.contactJID == "" {
+		s.WriteString("Select a contact to view chat\n")
+		return s.String()
+	}
+
+	if len(m.messages) == 0 {
+		s.WriteString("No messages yet\n")
+		return s.String()
+	}
+
+	for _, msg := range m.messages {
+		s.WriteString(fmt.Sprintf("[%s] %s: %s\n", msg.Time, msg.Sender, msg.Display))
+	}
+
+	return s.String()
+}
+
+// inputModel represents the message input field
+type inputModel struct {
+	value string
+	sent  bool
+}
+
+func initialInputField() inputModel {
+	return inputModel{
+		value: "",
+		sent:  false,
+	}
+}
+
 func (m inputModel) Init() bubbletea.Cmd { return nil }
+
 func (m inputModel) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	switch msg := msg.(type) {
 	case bubbletea.KeyMsg:
 		switch msg.Type {
 		case bubbletea.KeyEnter:
-			// TODO: send message
-			m.value = ""
+			if m.value != "" {
+				m.sent = true
+			}
 		case bubbletea.KeyRunes:
 			m.value += msg.String()
 		case bubbletea.KeyBackspace:
@@ -200,4 +287,7 @@ func (m inputModel) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	}
 	return m, nil
 }
-func (m inputModel) View() string { return fmt.Sprintf("> %s", m.value) }
+
+func (m inputModel) View() string {
+	return fmt.Sprintf("> %s", m.value)
+}
