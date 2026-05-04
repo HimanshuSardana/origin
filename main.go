@@ -11,12 +11,13 @@ import (
 func main() {
 	listFlag := flag.Bool("list", false, "List all contacts in fzf picker")
 	tuiFlag := flag.Bool("tui", false, "Open interactive TUI")
+	reloadFlag := flag.Bool("reload", false, "Fetch recent messages and update DB")
 	jidFlag := flag.String("jid", "", "Directly specify JID for testing")
 	flag.Parse()
 
 	// Only one mode at a time
-	if *listFlag && *tuiFlag {
-		fmt.Fprintf(os.Stderr, "Error: cannot use both --list and --tui\n")
+	if (*listFlag && *tuiFlag) || (*listFlag && *reloadFlag) || (*tuiFlag && *reloadFlag) {
+		fmt.Fprintf(os.Stderr, "Error: can only use one of --list, --tui, --reload\n")
 		os.Exit(1)
 	}
 
@@ -39,6 +40,15 @@ func main() {
 	if *listFlag {
 		// FZF mode - pick contact, then pick message, then copy/download
 		if err := runListMode(*jidFlag); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if *reloadFlag {
+		// Reload mode - fetch recent messages
+		if err := runReload(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
