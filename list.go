@@ -264,12 +264,18 @@ func listMessagesFZF(client *whatsmeow.Client, chatJID string) (*events.Message,
 			var display string
 			if conv := msg.Message.GetConversation(); conv != "" {
 				display = fmt.Sprintf("[Text] %s: %s", t, conv)
+			} else if ext := msg.Message.GetExtendedTextMessage(); ext != nil {
+				display = fmt.Sprintf("[Text] %s: %s", t, ext.GetText())
 			} else if msg.Message.GetImageMessage() != nil {
 				display = fmt.Sprintf("[Image] %s", t)
 			} else if msg.Message.GetVideoMessage() != nil {
 				display = fmt.Sprintf("[Video] %s", t)
 			} else if msg.Message.GetDocumentMessage() != nil {
 				display = fmt.Sprintf("[Doc] %s", t)
+			} else if msg.Message.GetAudioMessage() != nil {
+				display = fmt.Sprintf("[Audio] %s", t)
+			} else if msg.Message.GetStickerMessage() != nil {
+				display = fmt.Sprintf("[Sticker] %s", t)
 			} else {
 				display = fmt.Sprintf("[Other] %s", t)
 			}
