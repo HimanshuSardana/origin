@@ -7,8 +7,18 @@ import (
 
 	"github.com/HimanshuSardana/origin/whatsapp"
 	bubbletea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// contactItem implements list.Item for the bubbles list component
+type contactItem struct {
+	contact whatsapp.Contact
+}
+
+func (i contactItem) Title() string       { return i.contact.Name }
+func (i contactItem) Description() string { return i.contact.JID }
+func (i contactItem) FilterValue() string { return i.contact.Name }
 
 // Panel identifiers
 type panelType int
@@ -22,7 +32,7 @@ const (
 // Model represents the entire TUI state
 type model struct {
 	// Components
-	sidebar    sidebarModel
+	sidebar    list.Model
 	chatView   chatViewModel
 	inputField inputModel
 
@@ -46,7 +56,7 @@ func initialModel(waClient *whatsapp.Client) model {
 }
 
 func (m model) Init() bubbletea.Cmd {
-	return m.sidebar.Init()
+	return nil
 }
 
 func (m model) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
@@ -54,6 +64,8 @@ func (m model) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case bubbletea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		// Update sidebar size
+		m.sidebar.SetSize(m.width/3, m.height)
 		return m, nil
 
 	case messagesLoadedMsg:
@@ -87,17 +99,16 @@ func (m model) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	switch m.activePanel {
 	case panelSidebar:
 		newSidebar, cmd := m.sidebar.Update(msg)
-		m.sidebar = newSidebar.(sidebarModel)
+		m.sidebar = newSidebar
 
 		// Check if a contact was selected (Enter was pressed)
-		if m.sidebar.selected >= 0 && m.sidebar.selected < len(m.sidebar.items) {
-			selectedContact := m.sidebar.items[m.sidebar.selected]
-			m.chatView.contactJID = selectedContact.JID
-			m.sidebar.selected = -1 // reset
+		if sel := m.sidebar.SelectedItem(); sel != nil && msg.(bubbletea.KeyMsg).String() == "enter" {
+			item := sel.(contactItem)
+			m.chatView.contactJID = item.contact.JID
 
 			// Return a command to load messages
 			return m, func() bubbletea.Msg {
-				messages, err := m.waClient.GetMessages(context.Background(), selectedContact.JID, 10)
+				messages, err := m.waClient.GetMessages(context.Background(), item.contact.JID, 10)
 				if err != nil {
 					return messagesLoadedMsg{err: err}
 				}
@@ -176,105 +187,26 @@ func (m model) View() string {
 	)
 }
 
-// sidebarModel represents the contact list with scrolling
-type sidebarModel struct {
-	items          []whatsapp.Contact
-	cursor         int
-	selected       int // -1 means none
-	viewportHeight int // number of items visible at once
-	scrollOffset   int // index of first visible item
-}
-
-func initialSidebar(waClient *whatsapp.Client) sidebarModel {
+func initialSidebar(waClient *whatsapp.Client) list.Model {
 	contacts, err := waClient.GetContacts()
 	if err != nil {
-		return sidebarModel{items: []whatsapp.Contact{}}
+		contacts = []whatsapp.Contact{}
 	}
-	return sidebarModel{
-		items:          contacts,
-		cursor:         0,
-		selected:       -1,
-		viewportHeight: 20, // show 20 contacts at a time
-		scrollOffset:   0,
-	}
-}
 
-func (m sidebarModel) Init() bubbletea.Cmd { return nil }
+	// Convert contacts to list items
+	items := make([]list.Item, len(contacts))
+	for i, c := range contacts {
+		items[i] = contactItem{contact: c}
+	}
 
-func (m sidebarModel) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
-	switch msg := msg.(type) {
-	case bubbletea.KeyMsg:
-		switch msg.String() {
-		case "up":
-			if m.cursor > 0 {
-				m.cursor--
-				// Adjust scroll offset if cursor goes above viewport
-				if m.cursor < m.scrollOffset {
-					m.scrollOffset = m.cursor
-				}
-			}
-		case "down":
-			if m.cursor < len(m.items)-1 {
-				m.cursor++
-				// Adjust scroll offset if cursor goes below viewport
-				if m.cursor >= m.scrollOffset+m.viewportHeight {
-					m.scrollOffset = m.cursor - m.viewportHeight + 1
-				}
-			}
-		case "enter":
-			if m.cursor >= 0 && m.cursor < len(m.items) {
-				m.selected = m.cursor
-			}
-		}
-	}
-	return m, nil
-}
+	// Create the list with default delegate
+	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
+	l.Title = "Contacts"
+	l.SetShowStatusBar(true)
+	l.SetFilteringEnabled(true)
+	l.SetShowHelp(false)
 
-func (m sidebarModel) View() string {
-	var s strings.Builder
-	
-	// Show scroll up indicator if not at top
-	if m.scrollOffset > 0 {
-		s.WriteString("  ▲ more above\n")
-	}
-	
-	// Calculate visible range
-	start := m.scrollOffset
-	end := start + m.viewportHeight
-	if end > len(m.items) {
-		end = len(m.items)
-	}
-	
-	// Render visible items
-	for i := start; i < end; i++ {
-		item := m.items[i]
-		cursor := "  "
-		if i == m.cursor {
-			cursor = "> "
-		}
-		
-		// Truncate long names
-		name := item.Name
-		if len(name) > 25 {
-			name = name[:22] + "..."
-		}
-		
-		s.WriteString(fmt.Sprintf("%s%s\n", cursor, name))
-	}
-	
-	// Show scroll down indicator if not at bottom
-	if end < len(m.items) {
-		s.WriteString(fmt.Sprintf("  ▼ %d more below\n", len(m.items)-end))
-	}
-	
-	// Show counter at bottom
-	if len(m.items) > 0 {
-		s.WriteString(fmt.Sprintf("\n  [%d/%d]\n", m.cursor+1, len(m.items)))
-	} else {
-		s.WriteString("No contacts found\n")
-	}
-	
-	return s.String()
+	return l
 }
 
 // chatViewModel represents the chat history view
