@@ -56,6 +56,16 @@ func (m model) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
+	case messagesLoadedMsg:
+		if msg.err != nil {
+			// Error loading messages - could show error in UI
+			return m, nil
+		}
+		m.chatView.messages = msg.messages
+		// Auto-switch to chat view when messages load
+		m.activePanel = panelChat
+		return m, nil
+
 	case bubbletea.KeyMsg:
 		// Global key bindings for panel navigation
 		switch msg.String() {
@@ -79,18 +89,20 @@ func (m model) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		newSidebar, cmd := m.sidebar.Update(msg)
 		m.sidebar = newSidebar.(sidebarModel)
 
-		// Check if a contact was selected
+		// Check if a contact was selected (Enter was pressed)
 		if m.sidebar.selected >= 0 && m.sidebar.selected < len(m.sidebar.items) {
 			selectedContact := m.sidebar.items[m.sidebar.selected]
-			// Load messages for this contact
-			go func() {
-				_, err := m.waClient.GetMessages(context.Background(), selectedContact.JID, 10)
-				if err == nil {
-					// Update chat view with messages
-					// TODO: implement proper message passing
-				}
-			}()
+			m.chatView.contactJID = selectedContact.JID
 			m.sidebar.selected = -1 // reset
+
+			// Return a command to load messages
+			return m, func() bubbletea.Msg {
+				messages, err := m.waClient.GetMessages(context.Background(), selectedContact.JID, 10)
+				if err != nil {
+					return messagesLoadedMsg{err: err}
+				}
+				return messagesLoadedMsg{messages: messages}
+			}
 		}
 
 		return m, cmd
@@ -118,6 +130,12 @@ func (m model) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// messagesLoadedMsg is sent when messages are loaded from WhatsApp
+type messagesLoadedMsg struct {
+	messages []whatsapp.Message
+	err      error
 }
 
 func (m model) View() string {
@@ -334,4 +352,11 @@ func (m inputModel) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 
 func (m inputModel) View() string {
 	return fmt.Sprintf("> %s", m.value)
+}
+
+// runTUI starts the Bubbletea TUI
+func runTUI(client *whatsapp.Client) error {
+	p := bubbletea.NewProgram(initialModel(client), bubbletea.WithAltScreen())
+	_, err := p.Run()
+	return err
 }
