@@ -158,11 +158,13 @@ func (m model) View() string {
 	)
 }
 
-// sidebarModel represents the contact list
+// sidebarModel represents the contact list with scrolling
 type sidebarModel struct {
-	items    []whatsapp.Contact
-	cursor   int
-	selected int // -1 means none
+	items          []whatsapp.Contact
+	cursor         int
+	selected       int // -1 means none
+	viewportHeight int // number of items visible at once
+	scrollOffset   int // index of first visible item
 }
 
 func initialSidebar(waClient *whatsapp.Client) sidebarModel {
@@ -171,9 +173,11 @@ func initialSidebar(waClient *whatsapp.Client) sidebarModel {
 		return sidebarModel{items: []whatsapp.Contact{}}
 	}
 	return sidebarModel{
-		items:    contacts,
-		cursor:   0,
-		selected: -1,
+		items:          contacts,
+		cursor:         0,
+		selected:       -1,
+		viewportHeight: 20, // show 20 contacts at a time
+		scrollOffset:   0,
 	}
 }
 
@@ -186,10 +190,18 @@ func (m sidebarModel) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd)
 		case "up":
 			if m.cursor > 0 {
 				m.cursor--
+				// Adjust scroll offset if cursor goes above viewport
+				if m.cursor < m.scrollOffset {
+					m.scrollOffset = m.cursor
+				}
 			}
 		case "down":
 			if m.cursor < len(m.items)-1 {
 				m.cursor++
+				// Adjust scroll offset if cursor goes below viewport
+				if m.cursor >= m.scrollOffset+m.viewportHeight {
+					m.scrollOffset = m.cursor - m.viewportHeight + 1
+				}
 			}
 		case "enter":
 			if m.cursor >= 0 && m.cursor < len(m.items) {
@@ -202,16 +214,48 @@ func (m sidebarModel) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd)
 
 func (m sidebarModel) View() string {
 	var s strings.Builder
-	for i, item := range m.items {
+	
+	// Show scroll up indicator if not at top
+	if m.scrollOffset > 0 {
+		s.WriteString("  ▲ more above\n")
+	}
+	
+	// Calculate visible range
+	start := m.scrollOffset
+	end := start + m.viewportHeight
+	if end > len(m.items) {
+		end = len(m.items)
+	}
+	
+	// Render visible items
+	for i := start; i < end; i++ {
+		item := m.items[i]
 		cursor := "  "
 		if i == m.cursor {
 			cursor = "> "
 		}
-		s.WriteString(fmt.Sprintf("%s%s (%s)\n", cursor, item.Name, item.JID))
+		
+		// Truncate long names
+		name := item.Name
+		if len(name) > 25 {
+			name = name[:22] + "..."
+		}
+		
+		s.WriteString(fmt.Sprintf("%s%s\n", cursor, name))
 	}
-	if len(m.items) == 0 {
+	
+	// Show scroll down indicator if not at bottom
+	if end < len(m.items) {
+		s.WriteString(fmt.Sprintf("  ▼ %d more below\n", len(m.items)-end))
+	}
+	
+	// Show counter at bottom
+	if len(m.items) > 0 {
+		s.WriteString(fmt.Sprintf("\n  [%d/%d]\n", m.cursor+1, len(m.items)))
+	} else {
 		s.WriteString("No contacts found\n")
 	}
+	
 	return s.String()
 }
 
