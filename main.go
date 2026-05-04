@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 
@@ -35,16 +38,81 @@ func eventHandler(evt interface{}) {
 	}
 }
 
+func listContacts(db *sql.DB) error {
+	rows, err := db.Query("SELECT their_jid, full_name FROM whatsmeow_contacts WHERE full_name != '' ORDER BY full_name")
+	if err != nil {
+		return fmt.Errorf("query contacts: %w", err)
+	}
+	defer rows.Close()
+
+	var contacts []string
+	for rows.Next() {
+		var jid, fullName string
+		if err := rows.Scan(&jid, &fullName); err != nil {
+			return fmt.Errorf("scan row: %w", err)
+		}
+		contacts = append(contacts, fmt.Sprintf("%s\t%s", fullName, jid))
+	}
+
+	if len(contacts) == 0 {
+		fmt.Println("No contacts found")
+		return nil
+	}
+
+	// Pipe contacts to fzf
+	fzf := exec.Command("fzf", "--delimiter=\t", "--with-nth=1")
+	stdin, err := fzf.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("create stdin pipe: %w", err)
+	}
+
+	go func() {
+		defer stdin.Close()
+		for _, c := range contacts {
+			fmt.Fprintln(stdin, c)
+		}
+	}()
+
+	output, err := fzf.Output()
+	if err != nil {
+		return nil // fzf cancelled
+	}
+
+	if len(output) > 0 {
+		fmt.Printf("Selected: %s\n", string(output))
+	}
+
+	return nil
+}
+
 func main() {
 	// |------------------------------------------------------------------------------------------------------|
 	// | NOTE: You must also import the appropriate DB connector, e.g. github.com/mattn/go-sqlite3 for SQLite |
 	// |------------------------------------------------------------------------------------------------------|
+
+	listFlag := flag.Bool("list", false, "List all contacts in fzf picker")
+	flag.Parse()
 
 	dbLog := waLog.Stdout("Database", "DEBUG", true)
 	ctx := context.Background()
 	container, err := sqlstore.New(ctx, "sqlite3", "file:origin.db?_foreign_keys=on", dbLog)
 	if err != nil {
 		panic(err)
+	}
+
+	// Open direct DB connection for contact listing
+	db, err := sql.Open("sqlite3", "file:origin.db?_foreign_keys=on")
+	if err != nil {
+		panic(err)
+	}
+	defer db.Close()
+
+	if *listFlag {
+		if err := listContacts(db); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 	// If you want multiple sessions, remember their JIDs and use .GetDevice(jid) or .GetAllDevices() instead.
 	deviceStore, err := container.GetFirstDevice(ctx)
@@ -76,7 +144,7 @@ func main() {
 		}
 		fmt.Println("Already logged in, connected to WhatsApp Web server")
 		// prompt for phoneNumber
-		phoneNumber := "911234567890"
+		phoneNumber := "919899004405"
 		recipient := types.NewJID(phoneNumber, "s.whatsapp.net")
 		message := "Hello from WhatsMeow!"
 		_, err := client.SendMessage(context.Background(), recipient, &waE2E.Message{
