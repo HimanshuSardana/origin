@@ -204,7 +204,7 @@ func listMessagesFZF(client *whatsmeow.Client, chatJID string) (*events.Message,
 				PeerDataOperationRequestType: waE2E.PeerDataOperationRequestType_HISTORY_SYNC_ON_DEMAND.Enum(),
 				HistorySyncOnDemandRequest: &waE2E.PeerDataOperationRequestMessage_HistorySyncOnDemandRequest{
 					ChatJID:          proto.String(jid.String()),
-					OnDemandMsgCount: proto.Int32(10),
+					OnDemandMsgCount: proto.Int32(20),
 				},
 			},
 		},
