@@ -186,30 +186,33 @@ func listContactsFZF(db *sql.DB) (string, error) {
 }
 
 func listMessagesFZF(client *whatsmeow.Client, chatJID string) (*events.Message, error) {
+	fmt.Fprintf(os.Stderr, "Reloading latest messages for %s...\n", chatJID)
+	
+	// Ensure connected
+	if !client.IsConnected() {
+		return nil, fmt.Errorf("not connected to WhatsApp")
+	}
+	
 	jid, err := types.ParseJID(chatJID)
 	if err != nil {
 		return nil, err
 	}
 
-	fmt.Fprintf(os.Stderr, "DEBUG: Starting listMessagesFZF for %s\n", chatJID)
-	
+	// Channel for history sync
 	historyChan := make(chan *events.HistorySync, 1)
 	handlerID := client.AddEventHandler(func(evt interface{}) {
-		fmt.Fprintf(os.Stderr, "DEBUG: Got event type %T\n", evt)
 		if hs, ok := evt.(*events.HistorySync); ok {
-			fmt.Fprintf(os.Stderr, "DEBUG: Got HistorySync, type=%v\n", hs.Data.GetSyncType())
 			if hs.Data.GetSyncType() == waHistorySync.HistorySync_ON_DEMAND {
 				select {
 				case historyChan <- hs:
-					fmt.Fprintf(os.Stderr, "DEBUG: Sent history to channel\n")
 				default:
-					fmt.Fprintf(os.Stderr, "DEBUG: Channel full, dropping\n")
 				}
 			}
 		}
 	})
 	defer client.RemoveEventHandler(handlerID)
 
+	// Request history sync with higher message count
 	req := &waE2E.Message{
 		ProtocolMessage: &waE2E.ProtocolMessage{
 			Type: waE2E.ProtocolMessage_PEER_DATA_OPERATION_REQUEST_MESSAGE.Enum(),
@@ -217,7 +220,7 @@ func listMessagesFZF(client *whatsmeow.Client, chatJID string) (*events.Message,
 				PeerDataOperationRequestType: waE2E.PeerDataOperationRequestType_HISTORY_SYNC_ON_DEMAND.Enum(),
 				HistorySyncOnDemandRequest: &waE2E.PeerDataOperationRequestMessage_HistorySyncOnDemandRequest{
 					ChatJID:          proto.String(jid.String()),
-					OnDemandMsgCount: proto.Int32(20),
+					OnDemandMsgCount: proto.Int32(100), // Fetch up to 100 recent messages
 				},
 			},
 		},
@@ -227,19 +230,19 @@ func listMessagesFZF(client *whatsmeow.Client, chatJID string) (*events.Message,
 		return nil, err
 	}
 
+	fmt.Fprintf(os.Stderr, "Waiting for history sync response (30s timeout)...\n")
+
 	select {
 	case hs := <-historyChan:
-		fmt.Fprintf(os.Stderr, "DEBUG: Got history sync with %d conversations\n", len(hs.Data.GetConversations()))
+		fmt.Fprintf(os.Stderr, "Received history sync, processing...\n")
 		
 		var messages []*events.Message
 		for _, conv := range hs.Data.GetConversations() {
-			fmt.Fprintf(os.Stderr, "DEBUG: Checking conversation %s\n", conv.GetID())
 			if conv.GetID() == jid.String() || conv.GetID() == jid.ToNonAD().String() {
-				fmt.Fprintf(os.Stderr, "DEBUG: Found matching conversation with %d messages\n", len(conv.GetMessages()))
+				fmt.Fprintf(os.Stderr, "Found conversation with %d messages\n", len(conv.GetMessages()))
 				for _, histMsg := range conv.GetMessages() {
 					parsedMsg, err := client.ParseWebMessage(jid, histMsg.GetMessage())
 					if err != nil {
-						fmt.Fprintf(os.Stderr, "DEBUG: Failed to parse message: %v\n", err)
 						continue
 					}
 					messages = append(messages, parsedMsg)
@@ -249,10 +252,12 @@ func listMessagesFZF(client *whatsmeow.Client, chatJID string) (*events.Message,
 		}
 
 		if len(messages) == 0 {
-			fmt.Fprintf(os.Stderr, "DEBUG: No messages found for this contact\n")
 			return nil, fmt.Errorf("no messages found")
 		}
 
+		fmt.Fprintf(os.Stderr, "Found %d messages, showing in fzf...\n", len(messages))
+
+		// Show messages in fzf
 		var lines []string
 		for idx, msg := range messages {
 			t := msg.Info.Timestamp.Format("2006-01-02 15:04")
@@ -271,7 +276,7 @@ func listMessagesFZF(client *whatsmeow.Client, chatJID string) (*events.Message,
 			lines = append(lines, fmt.Sprintf("%d\t%s", idx, display))
 		}
 
-		fzf := exec.Command("fzf", "--delimiter=\t", "--with-nth=2", "--prompt=Select message: ")
+		fzf := exec.Command("fzf", "--delimiter=\t", "--with-nth=2", "--prompt=Select message: ", "--reverse")
 		stdin, err := fzf.StdinPipe()
 		if err != nil {
 			return nil, err
@@ -305,7 +310,6 @@ func listMessagesFZF(client *whatsmeow.Client, chatJID string) (*events.Message,
 		return nil, nil
 
 	case <-time.After(30 * time.Second):
-		fmt.Fprintf(os.Stderr, "DEBUG: Timeout waiting for history sync\n")
 		return nil, fmt.Errorf("timeout waiting for history sync")
 	}
 }
