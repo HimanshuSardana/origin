@@ -131,13 +131,14 @@ func (m model) View() string {
 
 // Placeholder models for each panel
 type sidebarModel struct {
-	items []string
-	cursor int
+	items    []whatsapp.Contact
+	cursor   int
+	selected int // -1 means none
 }
 
 func initialSidebar() bubbletea.Model {
 	return sidebarModel{
-		items: []string{"Contact 1", "Contact 2", "Contact 3"},
+		items: []whatsapp.Contact{},
 	}
 }
 
@@ -161,11 +162,14 @@ func (m sidebarModel) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd)
 func (m sidebarModel) View() string {
 	var s strings.Builder
 	for i, item := range m.items {
+		cursor := " "
 		if i == m.cursor {
-			s.WriteString(fmt.Sprintf("> %s\n", item))
-		} else {
-			s.WriteString(fmt.Sprintf("  %s\n", item))
+			cursor = "> "
 		}
+		s.WriteString(fmt.Sprintf("%s%s (%s)\n", cursor, item.Name, item.JID))
+	}
+	if len(m.items) == 0 {
+		s.WriteString("No contacts found\n")
 	}
 	return s.String()
 }
