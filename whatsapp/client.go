@@ -39,7 +39,7 @@ type Message struct {
 }
 
 func NewClient(dbPath string) (*Client, error) {
-	dbLog := waLog.Stdout("Database", "DEBUG", true)
+	dbLog := waLog.Stdout("Database", "ERROR", false)
 	ctx := context.Background()
 	container, err := sqlstore.New(ctx, "sqlite3", "file:"+dbPath+"?_foreign_keys=on", dbLog)
 	if err != nil {
@@ -92,7 +92,7 @@ func (c *Client) GetMessages(ctx context.Context, chatJID string, count int) ([]
 		return nil, fmt.Errorf("get device: %w", err)
 	}
 
-	clientLog := waLog.Stdout("Client", "DEBUG", true)
+	clientLog := waLog.Stdout("Client", "ERROR", false)
 	client := whatsmeow.NewClient(deviceStore, clientLog)
 
 	if client.Store.ID == nil {
@@ -205,7 +205,7 @@ func (c *Client) SendMessage(ctx context.Context, jid, message string) error {
 		return fmt.Errorf("get device: %w", err)
 	}
 
-	clientLog := waLog.Stdout("Client", "DEBUG", true)
+	clientLog := waLog.Stdout("Client", "ERROR", false)
 	client := whatsmeow.NewClient(deviceStore, clientLog)
 
 	if client.Store.ID == nil {
