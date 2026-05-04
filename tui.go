@@ -1,233 +1,199 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 
-	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
-	"go.mau.fi/whatsmeow/types/events"
+	"github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
-type Contact struct {
-	JID     string
-	Name    string
-	Preview string
-	Time    string
-	Unread  int
+// Panel identifiers
+type panelType int
+
+const (
+	panelSidebar panelType = iota
+	panelChat
+	panelInput
+)
+
+// Model represents the entire TUI state
+type model struct {
+	// Panels
+	sidebar     bubbletea.Model
+	chatView    bubbletea.Model
+	inputField  bubbletea.Model
+
+	// State
+	activePanel panelType
+	width       int
+	height      int
 }
 
-type Message struct {
-	Index   int
-	Display string
-	FullMsg *events.Message
-	Time    string
-	Type    string
-	Sender  string
+func initialModel() model {
+	return model{
+		sidebar:    initialSidebar(),
+		chatView:   initialChatView(),
+		inputField: initialInputField(),
+		activePanel: panelSidebar,
+	}
 }
 
-// showContactPicker displays a styled contact list with search
-func showContactPicker(contactList []Contact, onSelect func(Contact)) {
-	app := tview.NewApplication()
+func (m model) Init() bubbletea.Cmd {
+	return nil
+}
 
-	// Title
-	title := tview.NewTextView().
-		SetText(" WhatsApp Contacts ").
-		SetTextAlign(tview.AlignCenter).
-		SetTextColor(tcell.ColorWhite).
-		SetBackgroundColor(tcell.ColorDarkGreen)
+func (m model) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
+	switch msg := msg.(type) {
+	case bubbletea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		// TODO: update child models with new sizes
+		return m, nil
 
-	// Search input (initially hidden)
-	searchInput := tview.NewInputField().
-		SetLabel("Search: ").
-		SetFieldBackgroundColor(tcell.ColorDarkGray).
-		SetFieldTextColor(tcell.ColorWhite)
+	case bubbletea.KeyMsg:
+		// Global key bindings for panel navigation
+		switch msg.String() {
+		case "1":
+			m.activePanel = panelSidebar
+			return m, nil
+		case "2":
+			m.activePanel = panelChat
+			return m, nil
+		case "3":
+			m.activePanel = panelInput
+			return m, nil
+		case "q", "ctrl+c":
+			return m, bubbletea.Quit
+		}
+	}
 
-	// Contact list
-	list := tview.NewList().
-		ShowSecondaryText(true).
-		SetSelectedBackgroundColor(tcell.ColorDarkGreen).
-		SetSelectedTextColor(tcell.ColorWhite).
-		SetMainTextColor(tcell.ColorWhite).
-		SetSecondaryTextColor(tcell.ColorGray)
+	// Route key events to active panel
+	switch m.activePanel {
+	case panelSidebar:
+		newSidebar, cmd := m.sidebar.Update(msg)
+		m.sidebar = newSidebar
+		return m, cmd
+	case panelChat:
+		newChat, cmd := m.chatView.Update(msg)
+		m.chatView = newChat
+		return m, cmd
+	case panelInput:
+		newInput, cmd := m.inputField.Update(msg)
+		m.inputField = newInput
+		return m, cmd
+	}
 
-	// Store all contacts for filtering
-	allContacts := contactList
-	filteredContacts := contactList
+	return m, nil
+}
 
-	// Function to refresh list with filtered contacts
-	refreshList := func(filter string) {
-		list.Clear()
-		filter = strings.ToLower(strings.TrimSpace(filter))
-		
-		if filter == "" {
-			filteredContacts = allContacts
+func (m model) View() string {
+	// Define layout
+	sidebarWidth := m.width / 3
+	chatWidth := m.width - sidebarWidth
+	inputHeight := 3
+
+	// Adjust for input field
+	chatHeight := m.height - inputHeight
+
+	// Render panels
+	sidebarView := m.sidebar.View()
+	chatView := m.chatView.View()
+	inputView := m.inputField.View()
+
+	// Highlight active panel
+	if m.activePanel == panelSidebar {
+		sidebarView = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("205")).Render(sidebarView)
+	} else {
+		sidebarView = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Render(sidebarView)
+	}
+
+	if m.activePanel == panelChat {
+		chatView = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("205")).Render(chatView)
+	} else {
+		chatView = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Render(chatView)
+	}
+
+	if m.activePanel == panelInput {
+		inputView = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("205")).Render(inputView)
+	} else {
+		inputView = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Render(inputView)
+	}
+
+	// Layout: sidebar | (chat + input)
+	rightPanel := lipgloss.JoinVertical(lipgloss.Top, chatView, inputView)
+
+	return lipgloss.JoinHorizontal(lipgloss.Left,
+		lipgloss.NewStyle().Width(sidebarWidth).Height(m.height).Render(sidebarView),
+		lipgloss.NewStyle().Width(chatWidth).Height(m.height).Render(rightPanel),
+	)
+}
+
+// Placeholder models for each panel
+type sidebarModel struct {
+	items []string
+	cursor int
+}
+
+func initialSidebar() bubbletea.Model {
+	return sidebarModel{
+		items: []string{"Contact 1", "Contact 2", "Contact 3"},
+	}
+}
+
+func (m sidebarModel) Init() bubbletea.Cmd { return nil }
+func (m sidebarModel) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
+	switch msg := msg.(type) {
+	case bubbletea.KeyMsg:
+		switch msg.String() {
+		case "up":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down":
+			if m.cursor < len(m.items)-1 {
+				m.cursor++
+			}
+		}
+	}
+	return m, nil
+}
+func (m sidebarModel) View() string {
+	var s strings.Builder
+	for i, item := range m.items {
+		if i == m.cursor {
+			s.WriteString(fmt.Sprintf("> %s\n", item))
 		} else {
-			filteredContacts = nil
-			for _, c := range allContacts {
-				if strings.Contains(strings.ToLower(c.Name), filter) ||
-					strings.Contains(strings.ToLower(c.JID), filter) {
-					filteredContacts = append(filteredContacts, c)
-				}
-			}
-		}
-
-		for _, c := range filteredContacts {
-			name := c.Name
-			if c.Unread > 0 {
-				name = "[" + c.Name + "] [red]" + string(rune(c.Unread+'0')) + "[-]"
-			}
-			preview := c.Preview
-			if len(preview) > 50 {
-				preview = preview[:50] + "..."
-			}
-			contact := c
-			list.AddItem(name, preview, 0, func() {
-				app.Stop()
-				onSelect(contact)
-			})
+			s.WriteString(fmt.Sprintf("  %s\n", item))
 		}
 	}
-
-	// Initial population
-	refreshList("")
-
-	// Current focus: "list" or "search"
-	focus := "list"
-
-	// Help text
-	help := tview.NewTextView().
-		SetText(" ↑/↓: Navigate | Enter: Select | /: Search | Esc: Exit ").
-		SetTextAlign(tview.AlignCenter).
-		SetTextColor(tcell.ColorGray)
-
-	// Layout - search hidden initially
-	flex := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(title, 1, 0, false).
-		AddItem(list, 0, 1, true).
-		AddItem(help, 1, 0, false)
-
-	// Search input handler
-	searchInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			// Clear search and return to list
-			searchInput.SetText("")
-			refreshList("")
-			focus = "list"
-			flex.RemoveItem(searchInput)
-			app.SetFocus(list)
-			return nil
-		}
-		if event.Key() == tcell.KeyEnter {
-			// Return to list with current filter
-			focus = "list"
-			flex.RemoveItem(searchInput)
-			app.SetFocus(list)
-			return nil
-		}
-		return event
-	})
-
-	// Update filter as user types
-	searchInput.SetChangedFunc(func(text string) {
-		refreshList(text)
-	})
-
-	// Main input handler
-	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if focus == "list" {
-			if event.Rune() == '/' {
-				// Enter search mode
-				focus = "search"
-				flex.AddItem(searchInput, 1, 0, false)
-				app.SetFocus(searchInput)
-				return nil
-			}
-			if event.Key() == tcell.KeyEscape {
-				app.Stop()
-				onSelect(Contact{})
-				return nil
-			}
-		}
-		return event
-	})
-
-	if err := app.SetRoot(flex, true).EnableMouse(true).Run(); err != nil {
-		panic(err)
-	}
+	return s.String()
 }
 
-// showMessagePicker displays messages in a styled list
-func showMessagePicker(messages []Message, onSelect func(Message)) {
-	app := tview.NewApplication()
+type chatViewModel struct{ content string }
+func initialChatView() bubbletea.Model { return chatViewModel{content: "Select a contact to view chat"} }
+func (m chatViewModel) Init() bubbletea.Cmd { return nil }
+func (m chatViewModel) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) { return m, nil }
+func (m chatViewModel) View() string { return m.content }
 
-	// Title bar
-	title := tview.NewTextView().
-		SetText(" Messages (" + string(rune(len(messages)+'0')) + ") ").
-		SetTextAlign(tview.AlignCenter).
-		SetTextColor(tcell.ColorWhite).
-		SetBackgroundColor(tcell.ColorDarkBlue)
-
-	// Message list with better formatting
-	list := tview.NewList().
-		ShowSecondaryText(true).
-		SetSelectedBackgroundColor(tcell.ColorDarkBlue).
-		SetSelectedTextColor(tcell.ColorWhite).
-		SetMainTextColor(tcell.ColorWhite).
-		SetSecondaryTextColor(tcell.ColorGray)
-
-	for _, msg := range messages {
-		// Format based on message type
-		prefix := "📄"
-		color := "white"
+type inputModel struct{ value string }
+func initialInputField() bubbletea.Model { return inputModel{} }
+func (m inputModel) Init() bubbletea.Cmd { return nil }
+func (m inputModel) Update(msg bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
+	switch msg := msg.(type) {
+	case bubbletea.KeyMsg:
 		switch msg.Type {
-		case "Text":
-			prefix = "💬"
-			color = "white"
-		case "Image":
-			prefix = "🖼️"
-			color = "green"
-		case "Video":
-			prefix = "🎥"
-			color = "blue"
-		case "Doc":
-			prefix = "📎"
-			color = "yellow"
+		case bubbletea.KeyEnter:
+			// TODO: send message
+			m.value = ""
+		case bubbletea.KeyRunes:
+			m.value += msg.String()
+		case bubbletea.KeyBackspace:
+			if len(m.value) > 0 {
+				m.value = m.value[:len(m.value)-1]
+			}
 		}
-
-		mainText := "[" + color + "]" + prefix + " " + msg.Display + "[-]"
-		secondaryText := "   [gray]" + msg.Time + " | " + msg.Sender + "[-]"
-
-		message := msg
-		list.AddItem(mainText, secondaryText, 0, func() {
-			app.Stop()
-			onSelect(message)
-		})
 	}
-
-	// Help
-	help := tview.NewTextView().
-		SetText(" ↑/↓: Navigate | Enter: Select | Esc: Back ").
-		SetTextAlign(tview.AlignCenter).
-		SetTextColor(tcell.ColorGray)
-
-	// Layout
-	flex := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(title, 1, 0, false).
-		AddItem(list, 0, 1, true).
-		AddItem(help, 1, 0, false)
-
-	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			app.Stop()
-			onSelect(Message{})
-			return nil
-		}
-		return event
-	})
-
-	if err := app.SetRoot(flex, true).EnableMouse(true).Run(); err != nil {
-		panic(err)
-	}
+	return m, nil
 }
+func (m inputModel) View() string { return fmt.Sprintf("> %s", m.value) }
