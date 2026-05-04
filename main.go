@@ -10,7 +10,9 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	qrterminal "github.com/mdp/qrterminal"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
@@ -54,7 +56,6 @@ func main() {
 	client.AddEventHandler(eventHandler)
 
 	if client.Store.ID == nil {
-		// No ID stored, new login
 		qrChan, _ := client.GetQRChannel(context.Background())
 		err = client.Connect()
 		if err != nil {
@@ -73,6 +74,18 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
+		fmt.Println("Already logged in, connected to WhatsApp Web server")
+		// prompt for phoneNumber
+		phoneNumber := "911234567890"
+		recipient := types.NewJID(phoneNumber, "s.whatsapp.net")
+		message := "Hello from WhatsMeow!"
+		_, err := client.SendMessage(context.Background(), recipient, &waE2E.Message{
+			Conversation: &message,
+		})
+		if err != nil {
+			fmt.Println("Error sending message:", err)
+		}
+
 	}
 
 	// Listen to Ctrl+C (you can also do something else that prevents the program from exiting)
