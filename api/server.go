@@ -58,6 +58,10 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if messages == nil {
+		messages = []whatsapp.Message{}
+	}
+
 	respondJSON(w, http.StatusOK, messages)
 }
 
