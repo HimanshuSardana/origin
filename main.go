@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -10,12 +10,17 @@ import (
 )
 
 func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
 	client, err := whatsapp.NewClient("origin.db")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating client: %v\n", err)
+		logger.Error("failed to create client", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 	defer client.Close()
+	logger.Info("whatsapp client initialized", slog.String("db", "origin.db"))
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -23,13 +28,13 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	server := api.NewServer(client)
+	server := api.NewServer(client, logger)
 	server.RegisterRoutes(mux)
 
 	addr := ":" + port
-	fmt.Printf("Origin API server starting on http://localhost%s\n", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
+	logger.Info("starting server", slog.String("addr", addr))
+	if err := http.ListenAndServe(addr, server.LoggingMiddleware(mux)); err != nil {
+		logger.Error("server error", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 }
