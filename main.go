@@ -1,63 +1,35 @@
 package main
 
 import (
-	"flag"
 	"fmt"
+	"net/http"
 	"os"
 
+	"github.com/HimanshuSardana/origin/api"
 	"github.com/HimanshuSardana/origin/whatsapp"
 )
 
 func main() {
-	listFlag := flag.Bool("list", false, "List all contacts in fzf picker")
-	tuiFlag := flag.Bool("tui", false, "Open interactive TUI")
-	reloadFlag := flag.Bool("reload", false, "Fetch recent messages and update DB")
-	jidFlag := flag.String("jid", "", "Directly specify JID for testing")
-	flag.Parse()
-
-	// Only one mode at a time
-	if (*listFlag && *tuiFlag) || (*listFlag && *reloadFlag) || (*tuiFlag && *reloadFlag) {
-		fmt.Fprintf(os.Stderr, "Error: can only use one of --list, --tui, --reload\n")
+	client, err := whatsapp.NewClient("origin.db")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating client: %v\n", err)
 		os.Exit(1)
 	}
+	defer client.Close()
 
-	if *tuiFlag {
-		// Bubbletea TUI mode
-		client, err := whatsapp.NewClient("origin.db")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating client: %v\n", err)
-			os.Exit(1)
-		}
-		defer client.Close()
-
-		if err := runTUI(client); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		return
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
 	}
 
-	if *listFlag {
-		// FZF mode - pick contact, then pick message, then copy/download
-		if err := runListMode(*jidFlag); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
+	mux := http.NewServeMux()
+	server := api.NewServer(client)
+	server.RegisterRoutes(mux)
 
-	if *reloadFlag {
-		// Reload mode - fetch recent messages
-		if err := runReload(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		return
+	addr := ":" + port
+	fmt.Printf("Origin API server starting on http://localhost%s\n", addr)
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
+		os.Exit(1)
 	}
-
-	// Normal mode
-	fmt.Println("Usage:")
-	fmt.Println("  ./origin --list     # Pick contact and message using fzf")
-	fmt.Println("  ./origin --tui      # Interactive TUI")
-	fmt.Println("  ./origin            # Normal WhatsApp client")
 }
