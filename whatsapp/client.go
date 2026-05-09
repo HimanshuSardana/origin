@@ -80,6 +80,51 @@ func (c *Client) GetContacts() ([]Contact, error) {
 	return contacts, nil
 }
 
+func (c *Client) GetMessagesFromDB(chatJID string, limit int) ([]Message, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	rows, err := c.db.Query(
+		`SELECT message_id, sender_jid, timestamp, content, message_type 
+		 FROM whatsmeow_messages 
+		 WHERE chat_jid = ? 
+		 ORDER BY timestamp DESC 
+		 LIMIT ?`,
+		chatJID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query messages: %w", err)
+	}
+	defer rows.Close()
+
+	var messages []Message
+	idx := 0
+	for rows.Next() {
+		var msgID, sender, content, msgType string
+		var timestamp sql.NullTime
+		if err := rows.Scan(&msgID, &sender, &timestamp, &content, &msgType); err != nil {
+			return nil, fmt.Errorf("scan row: %w", err)
+		}
+
+		t := ""
+		if timestamp.Valid {
+			t = timestamp.Time.Format("2006-01-02 15:04")
+		}
+
+		messages = append(messages, Message{
+			Index:   idx,
+			Display: content,
+			Time:    t,
+			Type:    msgType,
+			Sender:  sender,
+		})
+		idx++
+	}
+
+	return messages, nil
+}
+
 func (c *Client) GetMessages(ctx context.Context, chatJID string, count int) ([]Message, error) {
 	jid, err := types.ParseJID(chatJID)
 	if err != nil {
